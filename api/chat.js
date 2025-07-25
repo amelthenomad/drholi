@@ -6,7 +6,7 @@ export const config = {
 
 export default async function handler(req, res) {
   // ✅ CORS Headers
-  res.setHeader("Access-Control-Allow-Origin", "https://drholi.webflow.io"); // Change to "*" during dev if needed
+  res.setHeader("Access-Control-Allow-Origin", "https://drholi.webflow.io"); // Replace with "*" for testing locally
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
@@ -21,7 +21,7 @@ export default async function handler(req, res) {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    console.error("Missing OpenAI API key.");
+    console.error("❌ Missing OpenAI API key");
     return res.status(500).json({ error: "Missing OpenAI API key" });
   }
 
@@ -29,14 +29,14 @@ export default async function handler(req, res) {
     const { messages } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: "Missing or invalid messages" });
+      return res.status(400).json({ error: "Missing or invalid messages array" });
     }
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model: "gpt-4",
@@ -47,17 +47,19 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    if (!data.choices || !data.choices[0]) {
-      return res.status(500).json({ error: "No response from OpenAI" });
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      console.error("❌ Invalid response from OpenAI:", data);
+      return res.status(500).json({ error: "No valid response from OpenAI" });
     }
 
     const reply = data.choices[0].message.content;
     return res.status(200).json({ reply });
   } catch (error) {
-    console.error("API error:", error);
+    console.error("❌ API error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
+
 
 
 
