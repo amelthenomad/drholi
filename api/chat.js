@@ -6,7 +6,7 @@ export const config = {
 
 export default async function handler(req, res) {
   // ✅ CORS Headers
-  res.setHeader("Access-Control-Allow-Origin", "*"); // 🔒 You can replace * with your Webflow domain in production
+  res.setHeader("Access-Control-Allow-Origin", "https://drholi.webflow.io"); // Change to "*" during dev if needed
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
@@ -16,6 +16,13 @@ export default async function handler(req, res) {
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    console.error("Missing OpenAI API key.");
+    return res.status(500).json({ error: "Missing OpenAI API key" });
   }
 
   try {
@@ -28,7 +35,7 @@ export default async function handler(req, res) {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -51,5 +58,6 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Internal server error" });
   }
 }
+
 
 
