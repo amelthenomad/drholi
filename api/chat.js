@@ -7,26 +7,26 @@ export const config = {
 };
 
 const SYSTEM_PROMPT = `
-You are "DrHoli AI", a clinical-grade herbal and supplement advisor...
+You are "DrHoli AI", a clinical‑grade herbal and supplement advisor...
 [INSERT FULL MASTER PROMPT HERE OR IMPORT FROM FILE]
 `;
 
 export default async function handler(req, res) {
-  // — CORS: allow all origins on OPTIONS & POST —
+  // — CORS: allow all origins for OPTIONS & POST —
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "OPTIONS,POST");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
+  // Handle preflight
   if (req.method === "OPTIONS") {
-    // Respond to preflight immediately
     return res.status(200).end();
   }
+  // Only allow POST
   if (req.method !== "POST") {
-    // Only POST is allowed
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // — PARSE RAW BODY —
+  // Parse JSON body
   let body;
   try {
     const bufs = [];
@@ -43,7 +43,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Missing OpenAI API key" });
   }
 
-  // — BUILD MESSAGE ARRAY INCLUDING SYSTEM PROMPT —
+  // Build the ChatGPT messages array
   const finalMessages = [
     {
       role: "system",
@@ -53,7 +53,7 @@ export default async function handler(req, res) {
     ...messages,
   ];
 
-  // — CALL OPENAI WITH STREAMING —
+  // Call OpenAI with streaming enabled
   let openaiRes;
   try {
     openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -70,8 +70,8 @@ export default async function handler(req, res) {
         ...(lang !== "en" ? { logit_bias: getLanguageBias(lang) } : {}),
       }),
     });
-  } catch (e) {
-    console.error("OpenAI request failed:", e);
+  } catch (err) {
+    console.error("OpenAI request failed:", err);
     return res.status(502).json({ error: "Failed to reach OpenAI" });
   }
 
@@ -80,7 +80,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "OpenAI failed to stream" });
   }
 
-  // — STREAM RESPONSE AS SSE —
+  // Stream back as Server‑Sent Events
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -89,7 +89,6 @@ export default async function handler(req, res) {
 
   const reader = openaiRes.body.getReader();
   const decoder = new TextDecoder("utf-8");
-
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -104,12 +103,11 @@ export default async function handler(req, res) {
         const parsed = JSON.parse(data);
         const token = parsed.choices[0].delta.content || "";
         res.write(`data: ${token}\n\n`);
-      } catch (err) {
-        console.error("Stream parse error:", err);
+      } catch (e) {
+        console.error("Stream parse error:", e);
       }
     }
   }
-
   res.end();
 }
 
@@ -121,5 +119,4 @@ function getLanguageBias(lang) {
     de: { "671": 5 },
   }[lang] || {};
 }
-
 
