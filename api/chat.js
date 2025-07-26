@@ -12,114 +12,98 @@ You are "DrHoli AI", a clinical‑grade herbal and supplement advisor...
 `;
 
 export default async function handler(req, res) {
-  // ─────── CORS ───────
-  // Always allow any origin (includes preflight)
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "OPTIONS,POST");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  // Preflight
+  // ─────── CORS PRELIGHT ───────
   if (req.method === "OPTIONS") {
+    // let Vercel (with vercel.json) do the actual headers
     return res.status(200).end();
   }
-
-  // Only accept POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // ─────── PARSE BODY ───────
-  let body;
   try {
-    const bufs = [];
-    for await (const chunk of req) bufs.push(chunk);
-    body = JSON.parse(Buffer.concat(bufs).toString());
-  } catch {
-    return res.status(400).json({ error: "Invalid JSON" });
-  }
+    const buffers = [];
+    for await (const chunk of req) buffers.push(chunk);
+    const body = JSON.parse(Buffer.concat(buffers).toString());
+    const { messages = [], lang = "en", complianceMode = false } = body;
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "Missing OpenAI API key" });
 
-  const { messages = [], lang = "en", complianceMode = false } = body;
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    console.error("Missing OPENAI_API_KEY");
-    return res.status(500).json({ error: "Missing OpenAI API key" });
-  }
-
-  // ─────── BUILD MESSAGES ───────
-  const finalMessages = [
-    {
-      role: "system",
-      content:
-        SYSTEM_PROMPT + (complianceMode ? "\n[compliance_mode: strict]" : ""),
-    },
-    ...messages,
-  ];
-
-  // ─────── CALL OPENAI ───────
-  let openaiRes;
-  try {
-    openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    const finalMessages = [
+      {
+        role: "system",
+        content:
+          SYSTEM_PROMPT + (complianceMode ? "\n[compliance_mode: strict]" : ""),
       },
-      body: JSON.stringify({
-        model: "gpt-4",
-        messages: finalMessages,
-        temperature: 0.7,
-        stream: true,
-        ...(lang !== "en" ? { logit_bias: getLanguageBias(lang) } : {}),
-      }),
-    });
-  } catch (err) {
-    console.error("OpenAI request failed:", err);
-    return res.status(502).json({ error: "Failed to reach OpenAI" });
-  }
+      ...messages,
+    ];
 
-  if (!openaiRes.ok || !openaiRes.body) {
-    console.error("OpenAI bad response:", await openaiRes.text());
-    return res.status(500).json({ error: "OpenAI failed to stream" });
-  }
-
-  // ─────── STREAM SSE ───────
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  });
-
-  const reader = openaiRes.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    for (const line of chunk.split("\n").filter((l) => l.startsWith("data:"))) {
-      const data = line.replace(/^data:\s*/, "");
-      if (data === "[DONE]") {
-        res.write("data: [DONE]\n\n");
-        return res.end();
+    const openaiRes = await fetch(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4",
+          messages: finalMessages,
+          temperature: 0.7,
+          stream: true,
+          ...(lang && lang !== "en" ? { logit_bias: getLanguageBias(lang) } : {}),
+        }),
       }
-      try {
-        const parsed = JSON.parse(data);
-        const token = parsed.choices[0].delta.content || "";
-        res.write(`data: ${token}\n\n`);
-      } catch (e) {
-        console.error("Stream parse error:", e);
+    );
+
+    if (!openaiRes.ok || !openaiRes.body) {
+      return res.status(500).json({ error: "OpenAI failed to stream" });
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
+    const decoder = new TextDecoder("utf-8");
+    const reader = openaiRes.body.getReader();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("\n").filter((l) => l.trim().startsWith("data:"));
+
+      for (const line of lines) {
+        const message = line.replace(/^data: /, "").trim();
+        if (message === "[DONE]") {
+          res.write("[DONE]\n\n");
+          return res.end();
+        }
+        try {
+          const json = JSON.parse(message);
+          const token = json.choices[0]?.delta?.content || "";
+          res.write(token);
+        } catch (err) {
+          console.error("Stream parse error:", err);
+        }
       }
     }
+  } catch (err) {
+    console.error("Handler error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
-  res.end();
 }
 
 function getLanguageBias(lang) {
-  return {
+  const biases = {
     sr: { "26739": 5 },
     fr: { "368": 5 },
     es: { "22191": 5 },
     de: { "671": 5 },
-  }[lang] || {};
+  };
+  return biases[lang] || {};
 }
 
