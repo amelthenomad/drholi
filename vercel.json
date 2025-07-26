@@ -1,22 +1,16 @@
 {
-  "headers": [
+  "routes": [
     {
-      "source": "/api/chat",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "https://drholi.webflow.io"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "POST, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type"
-        }
-      ]
+      "src": "/api/chat",
+      "methods": ["POST", "OPTIONS"],
+      "headers": {
+        "Access-Control-Allow-Origin": "https://drholi.webflow.io",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type"
+      },
+      "continue": true
     }
   ]
 }
+
 
