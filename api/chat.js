@@ -1,3 +1,5 @@
+// api/chat.js
+
 export const config = {
   api: {
     bodyParser: false,
@@ -10,32 +12,52 @@ You are "DrHoli AI", a clinical-grade herbal and supplement advisor...
 `;
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "https://drholi.webflow.io");
+  // — DYNAMIC CORS (allows Webflow & Vercel URLs) —
+  const allowed = [
+    "https://drholi.webflow.io",
+    "https://drholi.vercel.app",
+    "https://drholi-adaq6a264-amel-ibrisimovics-projects.vercel.app"
+  ];
+  const origin = req.headers.origin;
+  if (allowed.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
+  // — PARSE BODY —
+  let body;
   try {
     const buffers = [];
     for await (const chunk of req) buffers.push(chunk);
-    const body = JSON.parse(Buffer.concat(buffers).toString());
+    body = JSON.parse(Buffer.concat(buffers).toString());
+  } catch {
+    return res.status(400).json({ error: "Invalid JSON" });
+  }
 
-    const { messages = [], lang = "en", complianceMode = false } = body;
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "Missing OpenAI API key" });
+  const { messages = [], lang = "en", complianceMode = false } = body;
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    console.error("Missing OPENAI_API_KEY");
+    return res.status(500).json({ error: "Missing OpenAI API key" });
+  }
 
-    // Force inject the system prompt
-    const finalMessages = [
-      {
-        role: "system",
-        content: SYSTEM_PROMPT + (complianceMode ? "\n[compliance_mode: strict]" : ""),
-      },
-      ...messages,
-    ];
+  const finalMessages = [
+    { role: "system", content: SYSTEM_PROMPT + (complianceMode ? "\n[compliance_mode: strict]" : "") },
+    ...messages,
+  ];
 
-    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+  // — CALL OPENAI STREAM —
+  let openaiRes;
+  try {
+    openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -46,61 +68,60 @@ export default async function handler(req, res) {
         messages: finalMessages,
         temperature: 0.7,
         stream: true,
-        ...(lang && lang !== "en" ? { logit_bias: getLanguageBias(lang) } : {}),
+        ...(lang !== "en" ? { logit_bias: getLanguageBias(lang) } : {}),
       }),
     });
+  } catch (err) {
+    console.error("OpenAI request failed:", err);
+    return res.status(502).json({ error: "Failed to reach OpenAI" });
+  }
 
-    if (!openaiRes.ok || !openaiRes.body) {
-      return res.status(500).json({ error: "OpenAI failed to stream" });
-    }
+  if (!openaiRes.ok || !openaiRes.body) {
+    console.error("OpenAI bad response:", await openaiRes.text());
+    return res.status(500).json({ error: "OpenAI failed to stream" });
+  }
 
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
+  // — STREAM SSE BACK TO CLIENT —
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
 
-    const decoder = new TextDecoder("utf-8");
-    const reader = openaiRes.body.getReader();
+  const reader = openaiRes.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let done = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value);
-      const lines = chunk.split("\n").filter(line => line.trim().startsWith("data:"));
-
-      for (const line of lines) {
-        const message = line.replace(/^data: /, "").trim();
-        if (message === "[DONE]") {
-          res.write("[DONE]\n\n");
-          return res.end();
-        }
-        try {
-          const json = JSON.parse(message);
-          const token = json.choices[0]?.delta?.content || "";
-          res.write(token);
-        } catch (err) {
-          console.error("Stream parse error:", err);
-        }
+  while (!done) {
+    const { value, done: doneReading } = await reader.read();
+    done = doneReading;
+    const chunk = decoder.decode(value || new Uint8Array(), { stream: true });
+    for (const line of chunk.split("\n").filter(l => l.startsWith("data:"))) {
+      const data = line.replace(/^data:\s*/, "");
+      if (data === "[DONE]") {
+        res.write("data: [DONE]\n\n");
+        return res.end();
+      }
+      try {
+        const parsed = JSON.parse(data);
+        const token = parsed.choices[0]?.delta?.content || "";
+        res.write(`data: ${token}\n\n`);
+      } catch (e) {
+        console.error("Stream parse error:", e);
       }
     }
-  } catch (err) {
-    console.error("Handler error:", err);
-    res.status(500).json({ error: "Internal server error" });
   }
+  res.end();
 }
 
-// Optional: Apply logit_bias for preferred language (e.g., bias tokens toward certain phrases)
 function getLanguageBias(lang) {
   const biases = {
-    sr: { "26739": 5 }, // e.g., bias toward "zdravlje"
-    fr: { "368": 5 },   // bias toward "la"
-    es: { "22191": 5 }, // bias toward "el"
-    de: { "671": 5 },   // bias toward "der"
+    sr: { "26739": 5 },
+    fr: { "368": 5 },
+    es: { "22191": 5 },
+    de: { "671": 5 },
   };
   return biases[lang] || {};
 }
-
 
 
