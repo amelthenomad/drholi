@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DrHoli Chat (Test)</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; background: #f9f9f9; }
+    .msg { padding: 1rem; border-radius: 12px; margin-bottom: 1rem; }
+    .user { background: #dcfce7; text-align: right; }
+    .bot { background: #e0f7fa; text-align: left; }
+    textarea { width: 100%; padding: 1rem; font-size: 1rem; border-radius: 8px; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <h2>DrHoli Chat</h2>
+  <div id="chat"></div>
+  <textarea id="input" placeholder="Ask DrHoli…"></textarea>
+  <button onclick="send()">Send</button>
+
+  <script>
+    async function send() {
+      const input = document.getElementById('input');
+      const chat = document.getElementById('chat');
+      const text = input.value.trim();
+      if (!text) return;
+
+      chat.innerHTML += `<div class="msg user">${text}</div>`;
+      input.value = '';
+
+      const msgBox = document.createElement('div');
+      msgBox.className = 'msg bot';
+      chat.appendChild(msgBox);
+
+      const payload = {
+        messages: [
+          { role: "system", content: "You are DrHoli, a clinically-informed herbal and supplement advisor." },
+          { role: "user", content: text }
+        ]
+      };
+
+      const res = await fetch("https://drholi.vercel.app/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop();
+        for (const part of parts) {
+          if (!part.startsWith("data:")) continue;
+          const data = part.replace(/^data:\s*/, "").trim();
+          if (data === "[DONE]") return;
+          try {
+            const parsed = JSON.parse(data);
+            msgBox.textContent += parsed.choices?.[0]?.delta?.content || "";
+          } catch (e) { continue; }
+        }
+      }
+    }
+  </script>
+</body>
+</html>
