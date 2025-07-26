@@ -8,25 +8,27 @@ export const config = {
 
 const SYSTEM_PROMPT = `
 You are "DrHoli AI", a clinical‑grade herbal and supplement advisor...
-[INSERT FULL MASTER PROMPT HERE OR IMPORT FROM FILE]
+[PASTE YOUR FULL MASTER PROMPT HERE]
 `;
 
 export default async function handler(req, res) {
-  // — CORS: allow all origins for OPTIONS & POST —
+  // ─────── CORS ───────
+  // Always allow any origin (includes preflight)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "OPTIONS,POST");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Handle preflight
+  // Preflight
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
-  // Only allow POST
+
+  // Only accept POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Parse JSON body
+  // ─────── PARSE BODY ───────
   let body;
   try {
     const bufs = [];
@@ -43,7 +45,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Missing OpenAI API key" });
   }
 
-  // Build the ChatGPT messages array
+  // ─────── BUILD MESSAGES ───────
   const finalMessages = [
     {
       role: "system",
@@ -53,7 +55,7 @@ export default async function handler(req, res) {
     ...messages,
   ];
 
-  // Call OpenAI with streaming enabled
+  // ─────── CALL OPENAI ───────
   let openaiRes;
   try {
     openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -80,7 +82,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "OpenAI failed to stream" });
   }
 
-  // Stream back as Server‑Sent Events
+  // ─────── STREAM SSE ───────
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -89,11 +91,12 @@ export default async function handler(req, res) {
 
   const reader = openaiRes.body.getReader();
   const decoder = new TextDecoder("utf-8");
+
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     const chunk = decoder.decode(value, { stream: true });
-    for (const line of chunk.split("\n").filter(l => l.startsWith("data:"))) {
+    for (const line of chunk.split("\n").filter((l) => l.startsWith("data:"))) {
       const data = line.replace(/^data:\s*/, "");
       if (data === "[DONE]") {
         res.write("data: [DONE]\n\n");
