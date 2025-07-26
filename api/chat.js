@@ -12,32 +12,26 @@ You are "DrHoli AI", a clinical-grade herbal and supplement advisor...
 `;
 
 export default async function handler(req, res) {
-  // — DYNAMIC CORS (allows Webflow & Vercel URLs) —
-  const allowed = [
-    "https://drholi.webflow.io",
-    "https://drholi.vercel.app",
-    "https://drholi-adaq6a264-amel-ibrisimovics-projects.vercel.app"
-  ];
-  const origin = req.headers.origin;
-  if (allowed.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  // — CORS: allow all origins on OPTIONS & POST —
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "OPTIONS,POST");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
+    // Respond to preflight immediately
     return res.status(200).end();
   }
   if (req.method !== "POST") {
+    // Only POST is allowed
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // — PARSE BODY —
+  // — PARSE RAW BODY —
   let body;
   try {
-    const buffers = [];
-    for await (const chunk of req) buffers.push(chunk);
-    body = JSON.parse(Buffer.concat(buffers).toString());
+    const bufs = [];
+    for await (const chunk of req) bufs.push(chunk);
+    body = JSON.parse(Buffer.concat(bufs).toString());
   } catch {
     return res.status(400).json({ error: "Invalid JSON" });
   }
@@ -49,12 +43,17 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Missing OpenAI API key" });
   }
 
+  // — BUILD MESSAGE ARRAY INCLUDING SYSTEM PROMPT —
   const finalMessages = [
-    { role: "system", content: SYSTEM_PROMPT + (complianceMode ? "\n[compliance_mode: strict]" : "") },
+    {
+      role: "system",
+      content:
+        SYSTEM_PROMPT + (complianceMode ? "\n[compliance_mode: strict]" : ""),
+    },
     ...messages,
   ];
 
-  // — CALL OPENAI STREAM —
+  // — CALL OPENAI WITH STREAMING —
   let openaiRes;
   try {
     openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -71,8 +70,8 @@ export default async function handler(req, res) {
         ...(lang !== "en" ? { logit_bias: getLanguageBias(lang) } : {}),
       }),
     });
-  } catch (err) {
-    console.error("OpenAI request failed:", err);
+  } catch (e) {
+    console.error("OpenAI request failed:", e);
     return res.status(502).json({ error: "Failed to reach OpenAI" });
   }
 
@@ -81,7 +80,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "OpenAI failed to stream" });
   }
 
-  // — STREAM SSE BACK TO CLIENT —
+  // — STREAM RESPONSE AS SSE —
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -90,12 +89,11 @@ export default async function handler(req, res) {
 
   const reader = openaiRes.body.getReader();
   const decoder = new TextDecoder("utf-8");
-  let done = false;
 
-  while (!done) {
-    const { value, done: doneReading } = await reader.read();
-    done = doneReading;
-    const chunk = decoder.decode(value || new Uint8Array(), { stream: true });
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
     for (const line of chunk.split("\n").filter(l => l.startsWith("data:"))) {
       const data = line.replace(/^data:\s*/, "");
       if (data === "[DONE]") {
@@ -104,24 +102,24 @@ export default async function handler(req, res) {
       }
       try {
         const parsed = JSON.parse(data);
-        const token = parsed.choices[0]?.delta?.content || "";
+        const token = parsed.choices[0].delta.content || "";
         res.write(`data: ${token}\n\n`);
-      } catch (e) {
-        console.error("Stream parse error:", e);
+      } catch (err) {
+        console.error("Stream parse error:", err);
       }
     }
   }
+
   res.end();
 }
 
 function getLanguageBias(lang) {
-  const biases = {
+  return {
     sr: { "26739": 5 },
     fr: { "368": 5 },
     es: { "22191": 5 },
     de: { "671": 5 },
-  };
-  return biases[lang] || {};
+  }[lang] || {};
 }
 
 
